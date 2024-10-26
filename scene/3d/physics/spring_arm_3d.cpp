@@ -131,18 +131,22 @@ real_t SpringArm3D::get_hit_length() {
 }
 
 void SpringArm3D::process_spring() {
-	// From
-	real_t motion_delta(1);
-	real_t motion_delta_unsafe(1);
+	// `motion_delta` is a normalized position between the spring arm's origin and its end position
+	real_t motion_delta = 1.0;
+	real_t motion_delta_unsafe = 1.0;
 
-	Vector3 motion;
-	const Vector3 cast_direction(get_global_transform().basis.xform(Vector3(0, 0, 1)));
+	// we're casting from the spring arm _backwards_ by its length
+	const Vector3 cast_direction = get_global_transform().basis.xform(Vector3(0, 0, 1));
+	Vector3 motion = cast_direction * spring_length;
+	Transform3D shapecast_transform = get_global_transform();
 
-	motion = Vector3(cast_direction * (spring_length));
-
-	if (shape.is_null()) {
+	RID shape_rid;
+	if (shape.is_valid()) {
+		shape_rid = shape->get_rid();
+	} else {
+		// check for camera child and grab its pyramid shape
 		Camera3D *camera = nullptr;
-		for (int i = get_child_count() - 1; 0 <= i; --i) {
+		for (int i = get_child_count() - 1; i >= 0; --i) {
 			camera = Object::cast_to<Camera3D>(get_child(i));
 			if (camera) {
 				break;
@@ -150,52 +154,49 @@ void SpringArm3D::process_spring() {
 		}
 
 		if (camera != nullptr) {
-			//use camera rotation, but spring arm position
-			Transform3D base_transform = camera->get_global_transform();
-			base_transform.origin = get_global_transform().origin;
+			shape_rid = camera->get_pyramid_shape_rid();
 
-			PhysicsDirectSpaceState3D::ShapeParameters shape_params;
-			shape_params.shape_rid = camera->get_pyramid_shape_rid();
-			shape_params.transform = base_transform;
-			shape_params.motion = motion;
-			shape_params.exclude = excluded_objects;
-			shape_params.collision_mask = mask;
-
-			get_world_3d()->get_direct_space_state()->cast_motion(shape_params, motion_delta, motion_delta_unsafe);
-		} else {
-			PhysicsDirectSpaceState3D::RayParameters ray_params;
-			ray_params.from = get_global_transform().origin;
-			ray_params.to = get_global_transform().origin + motion;
-			ray_params.exclude = excluded_objects;
-			ray_params.collision_mask = mask;
-
-			PhysicsDirectSpaceState3D::RayResult r;
-			bool intersected = get_world_3d()->get_direct_space_state()->intersect_ray(ray_params, r);
-			if (intersected) {
-				real_t dist = get_global_transform().origin.distance_to(r.position);
-				dist -= margin;
-				motion_delta = dist / (spring_length);
-			}
+			// use camera rotation, but spring arm position
+			shapecast_transform = camera->get_global_transform();
+			shapecast_transform.origin = get_global_transform().origin;
 		}
-	} else {
+	}
+
+	if (shape_rid.is_valid()) {
 		PhysicsDirectSpaceState3D::ShapeParameters shape_params;
-		shape_params.shape_rid = shape->get_rid();
-		shape_params.transform = get_global_transform();
+		shape_params.shape_rid = shape_rid;
+		shape_params.transform = shapecast_transform;
 		shape_params.motion = motion;
 		shape_params.exclude = excluded_objects;
 		shape_params.collision_mask = mask;
 
 		get_world_3d()->get_direct_space_state()->cast_motion(shape_params, motion_delta, motion_delta_unsafe);
+	} else {
+		// Raycast fallback
+		PhysicsDirectSpaceState3D::RayParameters ray_params;
+		ray_params.from = get_global_transform().origin;
+		ray_params.to = get_global_transform().origin + motion;
+		ray_params.exclude = excluded_objects;
+		ray_params.collision_mask = mask;
+
+		PhysicsDirectSpaceState3D::RayResult r;
+		bool intersected = get_world_3d()->get_direct_space_state()->intersect_ray(ray_params, r);
+		if (intersected) {
+			real_t dist = get_global_transform().origin.distance_to(r.position);
+			motion_delta = MAX(dist / spring_length, 0.0);
+		}
 	}
 
-	current_spring_length = spring_length * motion_delta;
-	Transform3D child_transform;
-	child_transform.origin = get_global_transform().origin + cast_direction * (spring_length * motion_delta);
+	// set all children to be where the collision happened
+	current_spring_length = (spring_length * motion_delta) - margin;
 
-	for (int i = get_child_count() - 1; 0 <= i; --i) {
+	Transform3D child_transform;
+	child_transform.origin = get_global_transform().origin + cast_direction * current_spring_length;
+	child_transform.basis = get_global_transform().basis;
+
+	for (int i = get_child_count() - 1; i >= 0; --i) {
 		Node3D *child = Object::cast_to<Node3D>(get_child(i));
 		if (child) {
-			child_transform.basis = child->get_global_transform().basis;
 			child->set_global_transform(child_transform);
 		}
 	}
