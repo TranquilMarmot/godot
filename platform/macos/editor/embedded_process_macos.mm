@@ -345,8 +345,22 @@ void LayerHost::gui_input(const Ref<InputEvent> &p_event) {
 		return;
 	}
 
+	// When mouse is captured, adjust mouse position to window center to prevent
+	// GUI controls in the embedded game from incorrectly consuming events.
+	Ref<InputEvent> event_to_send = p_event;
+	if (process->get_mouse_mode() == DisplayServer::MOUSE_MODE_CAPTURED) {
+		Ref<InputEventMouse> mouse_event = p_event;
+		if (mouse_event.is_valid()) {
+			Vector2 window_center = get_size() / 2;
+			mouse_event = mouse_event->duplicate();
+			mouse_event->set_position(window_center);
+			mouse_event->set_global_position(window_center);
+			event_to_send = mouse_event;
+		}
+	}
+
 	PackedByteArray data;
-	if (encode_input_event(p_event, data)) {
+	if (encode_input_event(event_to_send, data)) {
 		script_debugger->send_message("embed:event", { data });
 		accept_event();
 	}
